@@ -1,0 +1,33 @@
+{
+  "name": "imagehiddenmessage",
+  "version": "0.0.1",
+  "description": "A tool to hide messages inhide images using stenography",
+  "main": "source/main.js",
+  "dependencies": {
+    "@types/node": "^12.6.8",
+    "fs": "^0.0.1-security",
+    "jimp": "^0.6.4",
+    "png-js": "^0.1.1",
+    "readline-sync": "^1.4.10"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WaldemarLehner/ImageHiddenMessage.git"
+  },
+  "keywords": [
+    "image",
+    "hide",
+    "message",
+    "hidden"
+  ],
+  "author": "Waldemar Lehner",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/WaldemarLehner/ImageHiddenMessage/issues"
+  },
+  "homepage": "https://github.com/WaldemarLehner/ImageHiddenMessage#readme"
+}
