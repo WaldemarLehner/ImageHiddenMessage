@@ -1,21 +1,41 @@
-const fs = require("fs");
-const cli = require("readline-sync");
-const jimp = require("jimp");
-beginning:
-while(true){
+import fs = require("fs");
+import cli = require("readline-sync");
+import Jimp = require("jimp");
+import "./types";
+import * as encoder from "./encoder";
+
+
+main();
+
+function main(){
     let path = selectImage();
-    let image = getImage(path);
-    if(typeof image === "undefined"){
-        console.warn("ERR: image is undefined.")
-        continue beginning;
-    }
-    let message : string | undefined;
-    //If correct entry is found, try to decode hidden message
-    if(checkIfEntryExists(image)){
+    //const image = await getImage(path);
+    //getImage(path)
+    Jimp.read(path)
+    .then( value => {
+       if( checkIfEntryExists(value)){
+           //The structure exists and one can assume that the image contains a hidden message.
+            let X = encoder.decodeAsNumber( getStream(0,20,value));
+            let L = encoder.decodeAsNumber( getStream(X+20,16,value));
+            //Now get L bytes after X+36 as a buffer and decode
+            let stream = getStream(X+36,L,value); // 1L = 2px
+            let message = encoder.decode(stream);
 
-    }else{
 
-    }
+        }else{
+           //No hidden message exists. Ask the user if they want to encode a hidden message
+           if(cli.keyInYN("No message has been found. Do you want to create one?")){
+                //TODO
+                generateMessage(value).then(value => {
+                    let buf = encoder.encode(value);
+                })
+           }else{
+               console.clear();
+               main();
+           }
+       }
+    }).catch(err=> {console.log("\n\n\nCould not load image. Do you need elevated priviledges? Or is it locked by another process? \nError message:"+err+" \n\n"); main();});
+    
 
 }
 
@@ -36,58 +56,34 @@ function selectImage():string {
 
 }
 
-function getImage(path:string){
-    jimp.read(path, (err:boolean,data:any) => {
-        if(err){
-            cli.question("Error: Could not open given image. Is this a valid .png? Is it locked by another process?");
-            return;
-        }else{
-            return data;
-        }
-    })
-}
 
 
-interface Pixel {
-    r:number,
-    g:number,
-    b:number,
-    a:number
-}
 
-interface Dimension {
-    x: number,
-    y : number
-}
-interface Coordinate {
-    x: number,
-    y: number
-}
-
-
-function checkIfEntryExists(image:any):boolean{
+function checkIfEntryExists(image:Jimp):boolean{
     //Read first 20px
-    let entryIndicator = getValueFromPixelValueArray( decodePixels(getPixelRange(0,19,image)));
-    let entry = getValueFromPixelValueArray(decodePixels(getPixelRange(entryIndicator,entryIndicator+19,image)));
+    let entryIndicator = encoder.decodeAsNumber( getStream(0,20,image));
+    //Read 20px after the X (including X)
+    let entry = encoder.decodeAsNumber( getStream(entryIndicator,20,image));
 
-    return entry === entryIndicator;
+    return entry === entryIndicator && entry !== 0;
 }
 
-
-function getPixelRange(lower:number,upper:number,image:any):Pixel[]{
+// Returns the Pixels from the given range.
+function getPixelRange(lower:number,upper:number,image:Jimp):Pixel[]{
     if(isInt(lower) && isInt(upper)){
         if(lower == upper)
-            return getPixelLinearized(upper,false,getImageDimensions(image),image);
+            return getPixelLinearized(upper,false,image);
         if(upper < lower){
             const v:number = lower;
             lower = upper;
             upper = v;
         }
-        let indicesArray = [];
+        //An array of indices. These are the indices of the pixels that shall be returned.
+        let indicesArray : number[] = [];
         for(let i = lower; i < upper;i++){
             indicesArray.push(i);
         }
-        return getPixelLinearized(indicesArray,false,getImageDimensions(image),image);
+        return getPixelLinearized(indicesArray,false,image);
 
     }else{
         throw new Error("Both upper and lower ranges need to be integers")
@@ -95,9 +91,10 @@ function getPixelRange(lower:number,upper:number,image:any):Pixel[]{
 }
 
 
-function getPixelLinearized(index:number | number[],allowOverflow: boolean ,dimensions:Dimension,image : any):Pixel[] {
+function getPixelLinearized(index:number | number[],allowOverflow: boolean ,image : Jimp):Pixel[] {
     
     //Check data integrity.
+    const dimensions = getImageDimensions(image);
     let pixelCount = dimensions.x * dimensions.y;
     if(Array.isArray(index)){
         if(!isEveryValueInt(index))
@@ -117,53 +114,28 @@ function getPixelLinearized(index:number | number[],allowOverflow: boolean ,dime
         returnArray.push(getPixel(get2DCoordinate(index[i])));
     }
     return returnArray;
-
+    
 
     function get2DCoordinate(index:number):Coordinate{
         return {x: index % dimensions.x,y: Math.floor(index/dimensions.x)}
     }
     function getPixel(position:Coordinate):Pixel{
         let color:number = image.getPixelColor(position.x,position.y);
-        let pixel:Pixel = jimp.intToRGBA(color);
+        let pixel:Pixel = Jimp.intToRGBA(color);
         return pixel;
     }
 }
 
-function decodePixels(pixels:Pixel[]):number[]{
-    // Get pairs of two to decode the hidden values
-    //get a string of [0-2]+ and convert to Number as base3
-    let array = [];
-    for(let pixel of pixels){
-        let pixelvalues = [pixel.r%3,pixel.g%3,pixel.g%3];
-        let str = pixelvalues.join("");
-     
-        array.push(str)    
-    }
-     return array;
-}
-
-function getValueFromPixelValueArray(arr:number[],radix?:number):number{
-    radix = radix || 3;
-    if(!isInt(radix) || radix < 1){
-        throw new TypeError("Given radix has to be a integer > 0");
-    }
-    let returnValue:number = 0;
-    let i = arr.length-1;
-    let exp = 0;
-    while(i){
-        returnValue += arr[i] * (3 ** exp);
-        i--;
-        exp++;
-    }
-    console.log(returnValue)
-    return returnValue;
-
-}
 
 
-function getImageDimensions(image:any) : Dimension {
-    let width = image.bitmap.width;
-    let height = image.bitmap.height;
+
+
+
+function getImageDimensions(image:Jimp) : Dimension {
+    let bitmap = image.bitmap;
+
+    let width = bitmap.width
+    let height = bitmap.height
     if (typeof width === "number" && typeof height === "number"){
         if(isInt(width) &&isInt(height)){
             return {x:width,y:height};
@@ -187,4 +159,77 @@ function isEveryValueInt(val: any[]):boolean{
             return false;
     }
     return true;
+}
+function byteArrayToBoolArray(buf:Uint8Array) : boolean[] {
+    let boolArray :boolean[] = [];
+    for(let i = 0;i<buf.length;i++){
+        let asBoolArray = intToBoolArray(buf[i],true);
+        for(let el of asBoolArray){
+            boolArray.push(el);
+        }
+    }
+    return boolArray;
+
+
+    function intToBoolArray(num:number,isLsbFirst? : boolean):boolean[]{
+        if(!isInt(num))
+            throw new TypeError("First param. needs to be an Integer.")
+        let retArr : boolean[] = []; //MSB first
+        
+        do{
+            if(num%2 === 0){
+                retArr.push(false);
+                num /= 2;
+            }else{
+                retArr.push(true);
+                num--;
+                num /= 2;
+            }
+
+            
+        }while(num > 0);
+        if(isLsbFirst){
+            return retArr.reverse();
+        }else{
+            return retArr;
+        }
+
+    }
+}
+
+function getStream(offset:number,length:number,image:Jimp) : Uint8Array {
+    let array = new Uint8Array(length)
+    const pixels = getPixelRange(offset,offset+length,image);
+    for(let i = 0;i<length;i++){
+        const p1 = pixels[2*i];
+        const p2 = pixels[2*i+1];
+        const pixelOctet = [ //First value is "LSB"
+            p1.r %2, p1.g %2,p1.b%2,p1.a%2,
+            p2.r %2, p2.g %2,p2.b%2,p2.a%2
+        ];
+        let number = 0;
+        for(let j = 0; j < pixelOctet.length;j++){
+            if(pixelOctet[j] === 1){
+                number += 2**j;
+            }
+        }
+        array[i] = number;
+
+    }
+    return array;
+}
+
+async function generateMessage(image:Jimp) : Promise<string> {
+    let maxBytes = (getImageDimensions(image).x * getImageDimensions(image).y / 2) - 56
+    console.log("Please type in the message. The maximum message length for this image is "+maxBytes+" Bytes. UTF8 uses 1 to 4 Bytes per Character.\n\n\”")
+    let msg = ""
+    do {
+        msg = getMessage();
+    }while(cli.keyInYN("\n\n\nThe message is: "+msg+"\n Is that correct? If it is not you get to retype the message") === false);
+    return msg;
+    function getMessage() : string {
+        return cli.question("Your message: ");
+    }
+
+ 
 }
