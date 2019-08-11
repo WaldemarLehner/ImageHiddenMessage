@@ -3,6 +3,7 @@ import cli = require("readline-sync");
 import Jimp = require("jimp");
 import "./types";
 import * as encoder from "./encoder";
+import { pathToFileURL } from "url";
 
 
 main();
@@ -13,6 +14,7 @@ function main(){
     //getImage(path)
     Jimp.read(path)
     .then( value => {
+        console.log("Image: ",value)
        if( checkIfEntryExists(value)){
            //The structure exists and one can assume that the image contains a hidden message.
             let X = encoder.decodeAsNumber( getStream(0,20,value));
@@ -26,8 +28,36 @@ function main(){
            //No hidden message exists. Ask the user if they want to encode a hidden message
            if(cli.keyInYN("No message has been found. Do you want to create one?")){
                 //TODO
-                generateMessage(value).then(value => {
-                    let buf = encoder.encode(value);
+                generateMessage(value).then(msg => {
+                    const buf = encoder.encode(msg);
+                    const messageArray = byteArrayToBoolArray(buf);
+                    const messageLength = Math.ceil(messageArray.length / 4);
+                    //Message Length as array:
+                    const messageLengthArray = intToBoolArray(messageLength,true,16);
+                    //get all message starts that are possile. They have to be picked so 
+                    //that the message fits into the image, yet does not get in conflict with the other critial data.
+                    const startingIndex = getSuitableMessageStartPosition(value,messageLength);    
+                    const startpointer = startingIndex-36      
+                    const startIndicationArray = intToBoolArray(startpointer,true,20);
+                    //WriteBuffers is an array of all the data that needs to be written.
+                    const writeCommands : WriteCommand[] = [
+                        {data: messageArray,offset: startingIndex},                 //Message
+                        {data: messageLengthArray, offset: startingIndex-16},       //Length Indicator
+                        {data: startIndicationArray, offset:startpointer},
+                        {data: startIndicationArray, offset:0}                                                    //2nd Pointer
+                    ];
+                    executeWriteCommands(writeCommands,value).then(img => {
+                        let timestamp = + new Date();
+                        let newPath  = path.split(".png").splice(1,1).join("") + "_" + timestamp + ".png";
+                        img.write(newPath,(err,img)=>{
+                            if (err) {
+                                throw err;
+                            }
+                            console.log("\n\n\n The image has been stored @ \n"+newPath);
+                            main();
+                        })
+                    });
+
                 })
            }else{
                console.clear();
@@ -72,7 +102,7 @@ function checkIfEntryExists(image:Jimp):boolean{
 function getPixelRange(lower:number,upper:number,image:Jimp):Pixel[]{
     if(isInt(lower) && isInt(upper)){
         if(lower == upper)
-            return getPixelLinearized(upper,false,image);
+            return getPixelLinearized(upper,image);
         if(upper < lower){
             const v:number = lower;
             lower = upper;
@@ -83,7 +113,7 @@ function getPixelRange(lower:number,upper:number,image:Jimp):Pixel[]{
         for(let i = lower; i < upper;i++){
             indicesArray.push(i);
         }
-        return getPixelLinearized(indicesArray,false,image);
+        return getPixelLinearized(indicesArray,image);
 
     }else{
         throw new Error("Both upper and lower ranges need to be integers")
@@ -91,25 +121,20 @@ function getPixelRange(lower:number,upper:number,image:Jimp):Pixel[]{
 }
 
 
-function getPixelLinearized(index:number | number[],allowOverflow: boolean ,image : Jimp):Pixel[] {
+function getPixelLinearized(index:number | number[] ,image : Jimp):Pixel[] {
     
     //Check data integrity.
     const dimensions = getImageDimensions(image);
     let pixelCount = dimensions.x * dimensions.y;
-    if(Array.isArray(index)){
-        if(!isEveryValueInt(index))
-            throw new TypeError("Given array has values that are not numbers");
-        
-    }else{
+    if(!Array.isArray(index)){
         index = [index]; // make it a one-element long array.
     }
+    if(!isEveryValueInt(index))
+            throw new TypeError("Given array has values that are not numbers  \nIndices: "+index);
     let returnArray:Pixel[] = [];
     for(let i = 0; i < index.length; i++){
-        if(pixelCount > index[i]){
-            if(!allowOverflow){
-                throw new Error("The given index shall not exceed the pixel count.");
-            }
-            index[i] %= pixelCount;
+        if(pixelCount < index[i]){
+                throw new Error("The given indices shall not exceed the pixel count. \nIndex in question:"+index[i]);
         }
         returnArray.push(getPixel(get2DCoordinate(index[i])));
     }
@@ -155,7 +180,7 @@ function isInt(val : number) : boolean{
 }
 function isEveryValueInt(val: any[]):boolean{
     for(let el of val){
-        if(isInt(el))
+        if(!isInt(el))
             return false;
     }
     return true;
@@ -171,36 +196,43 @@ function byteArrayToBoolArray(buf:Uint8Array) : boolean[] {
     return boolArray;
 
 
-    function intToBoolArray(num:number,isLsbFirst? : boolean):boolean[]{
-        if(!isInt(num))
-            throw new TypeError("First param. needs to be an Integer.")
-        let retArr : boolean[] = []; //MSB first
-        
-        do{
-            if(num%2 === 0){
-                retArr.push(false);
-                num /= 2;
-            }else{
-                retArr.push(true);
-                num--;
-                num /= 2;
-            }
-
-            
-        }while(num > 0);
-        if(isLsbFirst){
-            return retArr.reverse();
-        }else{
-            return retArr;
-        }
-
-    }
 }
 
+function intToBoolArray(num:number,isLsbFirst : boolean,fixedLength?:number):boolean[]{
+    if(!isInt(num))
+        throw new TypeError("First param. needs to be an Integer.")
+    let retArr : boolean[] = []; //MSB first
+    
+    do{
+        if(num%2 === 0){
+            retArr.push(false);
+            num /= 2;
+        }else{
+            retArr.push(true);
+            num--;
+            num /= 2;
+        }
+
+        
+    }while(num > 0);
+    if(typeof fixedLength === "number"){
+        const numbersToPrepend = fixedLength - retArr.length;
+        let dataToUnShift = new Array(numbersToPrepend).fill(false);
+        retArr.unshift(...dataToUnShift);
+    }
+    
+    
+    if(isLsbFirst){
+        return retArr.reverse();
+    }else{
+        return retArr;
+    }
+
+}
 function getStream(offset:number,length:number,image:Jimp) : Uint8Array {
     let array = new Uint8Array(length)
     const pixels = getPixelRange(offset,offset+length,image);
-    for(let i = 0;i<length;i++){
+    for(let i = 0;i<Math.floor(length/2);i++){
         const p1 = pixels[2*i];
         const p2 = pixels[2*i+1];
         const pixelOctet = [ //First value is "LSB"
@@ -232,4 +264,77 @@ async function generateMessage(image:Jimp) : Promise<string> {
     }
 
  
+}
+
+
+function getSuitableMessageStartPosition(img:Jimp,messageLength:number):number{
+    const pixelCount = getImageDimensions(img).x * getImageDimensions(img).y;
+    const lowerBound = 56 // 20px for begin, 20px for begin check, 16px for length
+    const messageLengthInPx = messageLength/4; // 1px = 1 nibble; 2px = 1 Byte
+    const upperBound = pixelCount - messageLengthInPx-1;
+    //The Starting Position of the Message:
+    const msgstart = Math.floor(lowerBound + Math.random() * (upperBound-lowerBound));
+    return msgstart;
+
+
+
+
+}
+
+
+
+async function executeWriteCommands(cmds: WriteCommand[],image:Jimp) : Promise<Jimp> {
+    for(const cmd of cmds){
+        await writeCommand(cmd.data,cmd.offset);
+    }
+    return image;
+
+    async function writeCommand(data:boolean[],offset:number){
+        //Write data as pixelsmask (true and false)
+        let DataAspixelBits :PixelMask[]= [];
+        for(let i = 0; i < data.length / 4;i++){
+            DataAspixelBits.push({
+                r: data[i*4],
+                g: data[i*4+1],
+                b: data[i*4+2],
+                a: data[i*4+3]
+            })
+        }
+        for(let i = offset; i < offset+DataAspixelBits.length;i++){
+            ///STOPPED HERE
+            const pixelIndex = [i%image.getWidth(),Math.floor(i/image.getWidth())];
+            let pixel :Pixel= image.intToRGBA( image.getPixelColor(pixelIndex[0],pixelIndex[1]));
+            pixel = manipulatePixel(pixel,DataAspixelBits[i]);
+            image.setPixelColor(image.rgbaToInt(pixel.r,pixel.g,pixel.b,pixel.a,null),pixelIndex[0],pixelIndex[1])
+        }
+        return;
+       
+
+        function manipulatePixel(px:Pixel,pxm:PixelMask){
+            if((px.a %2 === 0 && pxm.a) || (px.a %2 === 1 && !pxm.a) ){
+                px.a = changeValue(px.a);
+            }
+            if((px.r %2 === 0 && pxm.r) || (px.r %2 === 1 && !pxm.r) ){
+                px.r = changeValue(px.r);
+            }
+            if((px.g %2 === 0 && pxm.g) || (px.g %2 === 1 && !pxm.g) ){
+                px.g = changeValue(px.g);
+            }
+            if((px.b %2 === 0 && pxm.b) || (px.b %2 === 1 && !pxm.b) ){
+                px.b = changeValue(px.b);
+            }
+            return px;
+
+            function changeValue(x:number){
+                if(x === 0){
+                    return 1;
+                }else if( x=== 255){
+                    return 254;
+                }else{
+                    return x += (Math.fround(Math.random())*2)-1 //returns either 1 or -1
+                }
+            }
+
+        }
+    }
 }

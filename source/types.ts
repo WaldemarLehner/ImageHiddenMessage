@@ -4,6 +4,13 @@ interface Pixel {
     b:number,
     a:number
 }
+interface PixelMask {
+    r:boolean,
+    g:boolean,
+    b:boolean,
+    a:boolean
+}
+
 
 interface Dimension {
     x: number,
@@ -12,4 +19,8 @@ interface Dimension {
 interface Coordinate {
     x: number,
     y: number
+}
+interface WriteCommand {
+    data: boolean[],
+    offset: number
 }
