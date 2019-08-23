@@ -17,7 +17,7 @@ function main(){
         console.log("Image: ",value)
        if( checkIfEntryExists(value)){
            //The structure exists and one can assume that the image contains a hidden message.
-            let X = encoder.decodeAsNumber( getStream(0,20,value));
+            let X = encoder.decodeAsNumber( getStream(0,20,value)) ;
             let L = encoder.decodeAsNumber( getStream(X+20,16,value));
             //Now get L bytes after X+36 as a buffer and decode
             let stream = getStream(X+36,L,value); // 1L = 2px
@@ -29,8 +29,8 @@ function main(){
            if(cli.keyInYN("No message has been found. Do you want to create one?")){
                 //TODO
                 generateMessage(value).then(msg => {
-                    const buf = encoder.encode(msg);
-                    const messageArray = byteArrayToBoolArray(buf);
+                    
+                    const messageArray = encoder.encode(msg);
                     const messageLength = Math.ceil(messageArray.length / 4);
                     //Message Length as array:
                     const messageLengthArray = intToBoolArray(messageLength,true,16);
@@ -91,7 +91,7 @@ function selectImage():string {
 
 function checkIfEntryExists(image:Jimp):boolean{
     //Read first 20px
-    let entryIndicator = encoder.decodeAsNumber( getStream(0,20,image));
+    let entryIndicator = encoder.decodeAsNumber( getStream(0,20,image))  % (image.getWidth() * image.getHeight()) ;
     //Read 20px after the X (including X)
     let entry = encoder.decodeAsNumber( getStream(entryIndicator,20,image));
 
@@ -100,6 +100,7 @@ function checkIfEntryExists(image:Jimp):boolean{
 
 // Returns the Pixels from the given range.
 function getPixelRange(lower:number,upper:number,image:Jimp):Pixel[]{
+    console.log("upper:",upper,"lower:",lower)
     if(isInt(lower) && isInt(upper)){
         if(lower == upper)
             return getPixelLinearized(upper,image);
@@ -132,7 +133,9 @@ function getPixelLinearized(index:number | number[] ,image : Jimp):Pixel[] {
     if(!isEveryValueInt(index))
             throw new TypeError("Given array has values that are not numbers  \nIndices: "+index);
     let returnArray:Pixel[] = [];
+    console.log(index)
     for(let i = 0; i < index.length; i++){
+        console.log(">>> "+i+" @ "+index[i])
         if(pixelCount < index[i]){
                 throw new Error("The given indices shall not exceed the pixel count. \nIndex in question:"+index[i]);
         }
@@ -199,8 +202,9 @@ function byteArrayToBoolArray(buf:Uint8Array) : boolean[] {
 }
 
 function intToBoolArray(num:number,isLsbFirst : boolean,fixedLength?:number):boolean[]{
+    
     if(!isInt(num))
-        throw new TypeError("First param. needs to be an Integer.")
+       throw new TypeError("First param. needs to be an Integer.")
     let retArr : boolean[] = []; //MSB first
     
     do{
@@ -216,9 +220,15 @@ function intToBoolArray(num:number,isLsbFirst : boolean,fixedLength?:number):boo
         
     }while(num > 0);
     if(typeof fixedLength === "number"){
-        const numbersToPrepend = fixedLength - retArr.length;
-        let dataToUnShift = new Array(numbersToPrepend).fill(false);
-        retArr.unshift(...dataToUnShift);
+        const numbersToPrepend = fixedLength*4 - retArr.length; //*4 because 1px is 4 bits (1 nibble)
+
+        if(numbersToPrepend > 0){
+            let dataToUnShift = new Array(numbersToPrepend).fill(false);
+            retArr.unshift(...dataToUnShift);
+        }else if(numbersToPrepend < 0){
+            throw new Error("The given space passed as fixedLength is not enough! FixedLength:"+fixedLength+" MessageLength:"+retArr.length)
+        }
+        
     }
     
     
@@ -229,23 +239,22 @@ function intToBoolArray(num:number,isLsbFirst : boolean,fixedLength?:number):boo
     }
 
 }
-function getStream(offset:number,length:number,image:Jimp) : Uint8Array {
-    let array = new Uint8Array(length)
-    const pixels = getPixelRange(offset,offset+length,image);
-    for(let i = 0;i<Math.floor(length/2);i++){
-        const p1 = pixels[2*i];
-        const p2 = pixels[2*i+1];
-        const pixelOctet = [ //First value is "LSB"
-            p1.r %2, p1.g %2,p1.b%2,p1.a%2,
-            p2.r %2, p2.g %2,p2.b%2,p2.a%2
-        ];
-        let number = 0;
-        for(let j = 0; j < pixelOctet.length;j++){
-            if(pixelOctet[j] === 1){
-                number += 2**j;
-            }
-        }
-        array[i] = number;
+/**  
+ * @param length in chars.
+*/
+function getStream(offset:number,length:number,image:Jimp) : boolean[] {
+    let array:boolean[] = []
+    const pixels = getPixelRange(offset,offset+2*length,image);
+    for(let i = 0;i<2*length;i++){
+        const px = pixels[i];
+        array.push(
+            px.r % 2 !== 0,
+            px.g % 2 !== 0,
+            px.b % 2 !== 0,
+            px.a % 2 !== 0
+        );
+       
+        
 
     }
     return array;
@@ -291,26 +300,41 @@ async function executeWriteCommands(cmds: WriteCommand[],image:Jimp) : Promise<J
 
     async function writeCommand(data:boolean[],offset:number){
         //Write data as pixelsmask (true and false)
+        if(data.length % 4 !== 0){
+            throw new Error("data needs to be a multiple of 4 long. Message Length:"+data.length)
+        }
         let DataAspixelBits :PixelMask[]= [];
-        for(let i = 0; i < data.length / 4;i++){
+        for(let i = 0; i < (data.length / 4);i++){
             DataAspixelBits.push({
-                r: data[i*4],
-                g: data[i*4+1],
-                b: data[i*4+2],
-                a: data[i*4+3]
+                r: data[i*4] || false,
+                g: data[i*4+1] || false,
+                b: data[i*4+2] || false,
+                a: data[i*4+3] || false
             })
         }
-        for(let i = offset; i < offset+DataAspixelBits.length;i++){
-            ///STOPPED HERE
-            const pixelIndex = [i%image.getWidth(),Math.floor(i/image.getWidth())];
-            let pixel :Pixel= image.intToRGBA( image.getPixelColor(pixelIndex[0],pixelIndex[1]));
-            pixel = manipulatePixel(pixel,DataAspixelBits[i]);
-            image.setPixelColor(image.rgbaToInt(pixel.r,pixel.g,pixel.b,pixel.a,null),pixelIndex[0],pixelIndex[1])
+        try{
+            for(let i = offset; i < offset+DataAspixelBits.length;i++){
+                ///STOPPED HERE
+                const pixelIndex = [i%image.getWidth(),Math.floor(i/image.getWidth())];
+                let pixel :Pixel= Jimp.intToRGBA( image.getPixelColor(pixelIndex[0],pixelIndex[1]));
+                console.log(320,pixel)
+                
+                
+                pixel = manipulatePixel(pixel,DataAspixelBits[i-offset]);
+
+                const pixelValue = Jimp.rgbaToInt(pixel.r,pixel.g,pixel.b,pixel.a,undefined)
+                image.setPixelColor(pixelValue,pixelIndex[0],pixelIndex[1])
+            }
+        }catch(e){
+            console.error("Failed to manipulate image");
+            throw e;
         }
+        
         return;
        
 
         function manipulatePixel(px:Pixel,pxm:PixelMask){
+            
             if((px.a %2 === 0 && pxm.a) || (px.a %2 === 1 && !pxm.a) ){
                 px.a = changeValue(px.a);
             }
@@ -325,13 +349,16 @@ async function executeWriteCommands(cmds: WriteCommand[],image:Jimp) : Promise<J
             }
             return px;
 
+
+            /// Change the value % 2 of the pixel. (0 --> 1; 1 --> 0)
             function changeValue(x:number){
                 if(x === 0){
                     return 1;
                 }else if( x=== 255){
                     return 254;
-                }else{
-                    return x += (Math.fround(Math.random())*2)-1 //returns either 1 or -1
+                }else{                  
+                    return x += (Math.round(Math.random())*2)-1 //returns either 1 or -1
+                    
                 }
             }
 
