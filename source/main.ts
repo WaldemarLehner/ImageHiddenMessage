@@ -22,47 +22,19 @@ function main(){
             //Now get L bytes after X+36 as a buffer and decode
             let stream = getStream(X+36,L,image); // 
             let message = encoder.decode(stream);
-            console.log("message >>> ",message)
+            console.log("The Message reads the following:\n",message,"\nMessage Length: ",message.length, "charcters\n\n")
+            if(cli.keyInYN("Do you want to create a new message?")){
+                generateMessageAndPlace(path,image);
+            }else{
+                console.clear();
+                main();
+            }
 
         }else{
            //No hidden message exists. Ask the user if they want to encode a hidden message
            if(cli.keyInYN("No message has been found. Do you want to create one?")){
-                //TODO
-                generateMessage(image).then(msg => {
-                    //The message encoded as booleanArray
-                    const messageArray = encoder.encode(msg);
-                    
-                    //Message Length as array:
-                    const messageLengthArray = convert.intToBoolArray(messageArray.length/4,16*4);
-                    console.log("msg len arr:",messageArray.length,messageLengthArray);
-                    //Gets a working message start
-                    const startingIndex = getSuitableMessageStartPosition(image,messageArray.length/4);    
-                    const startpointer = startingIndex-36//X
-                    const startIndicationArray = convert.intToBoolArray(startpointer,20*4);
-
-                    console.log("###\n")
-                    console.log(startpointer,"<>",startIndicationArray)
-                    //WriteBuffers is an array of all the data that needs to be written.
-                    const writeCommands : WriteCommand[] = [
-                        {data: startIndicationArray, offset:0}   ,
-                        {data: startIndicationArray, offset:startpointer},           
-                        {data: messageLengthArray, offset: startpointer+20},     
-                        {data: messageArray,offset: startpointer+36}          
-                    ];
-                    executeWriteCommands(writeCommands,image).then(img => {
-                        let timestamp = + new Date();
-                        console.log("path:",path)
-                        let newPath  = path.split(".png")[0] + "_" + timestamp + ".png";
-                        img.write(newPath,(err,img)=>{
-                            if (err) {
-                                throw err;
-                            }
-                            console.log("\n\n\n The image has been stored @ \n"+newPath);
-                            main();
-                        })
-                    });
-
-                })
+             generateMessageAndPlace(path,image);
+             
            }else{
                console.clear();
                main();
@@ -89,8 +61,44 @@ function selectImage():string {
     }
 
 }
+/**
+ * Generates the message and then does the steps to place the protocol inside the image
+ * @param path Path to image
+ * @param image Image object
+ */
+function generateMessageAndPlace(path:string,image:Jimp){
+    generateMessage(image).then(msg => {
+        //The message encoded as booleanArray
+        const messageArray = encoder.encode(msg);
+        
+        //Message Length as array:
+        const messageLengthArray = convert.intToBoolArray(messageArray.length/4,16*4);
+        //Gets a working message start
+        const startingIndex = getSuitableMessageStartPosition(image,messageArray.length/4);    
+        const startpointer = startingIndex-36//X
+        const startIndicationArray = convert.intToBoolArray(startpointer,20*4);
 
+        //WriteBuffers is an array of all the data that needs to be written.
+        const writeCommands : WriteCommand[] = [
+            {data: startIndicationArray, offset:0}   ,
+            {data: startIndicationArray, offset:startpointer},           
+            {data: messageLengthArray, offset: startpointer+20},     
+            {data: messageArray,offset: startpointer+36}          
+        ];
+        executeWriteCommands(writeCommands,image).then(img => {
+            let timestamp = + new Date();
+            let newPath  = path.split(".png")[0] + "_" + timestamp + ".png";
+            img.write(newPath,(err,img)=>{
+                if (err) {
+                    throw err;
+                }
+                console.log("\n\n\n The image has been stored @ \n"+newPath);
+                main();
+            })
+        });
 
+    })
+}
 
 
 function checkIfEntryExists(image:Jimp):boolean{
@@ -98,7 +106,6 @@ function checkIfEntryExists(image:Jimp):boolean{
     let entryIndicator =    convert.boolArrayToInt( getStream(0,20,image))              % (image.getWidth() * image.getHeight()) ;
     //Read 20px after the X (including X)
     let entry =             convert.boolArrayToInt( getStream(entryIndicator,20,image)) % (image.getWidth() * image.getHeight()) ;
-    console.log(entryIndicator,entry)
     return entry === entryIndicator && entry !== 0 && entry !== 2**80;
 }
 
@@ -237,7 +244,7 @@ function getStream(offset:number,length:number,image:Jimp) : boolean[] {
  */
 async function generateMessage(image:Jimp) : Promise<string> {
     let maxBytes = (getImageDimensions(image).x * getImageDimensions(image).y / 2) - 56
-    console.log("Please type in the message. The maximum message length for this image is "+maxBytes+" Bytes. UTF8 uses 1 to 4 Bytes per Character.\n\n\”")
+    console.log("Please type in the message. The maximum message length for this image is "+maxBytes/2+" characters.\n\n\”")
     let msg = ""
     do {
         msg = getMessage();
@@ -280,7 +287,6 @@ async function executeWriteCommands(cmds: WriteCommand[],image:Jimp) : Promise<J
     for(const cmd of cmds){
         i++
         await writeCommand(cmd.data,cmd.offset);
-        console.log("! Executed command number ",i)
 
     }
     return image;
@@ -303,7 +309,6 @@ async function executeWriteCommands(cmds: WriteCommand[],image:Jimp) : Promise<J
                 a: data[i*4+3] 
             })
         }
-        console.log(DataAspixelBits)
         try{
             for(let i = 0; i < DataAspixelBits.length;i++){
                 ///STOPPED HERE
