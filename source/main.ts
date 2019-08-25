@@ -18,7 +18,7 @@ function main(){
        if( checkIfEntryExists(image)){
            //The structure exists and one can assume that the image contains a hidden message.
             let X = convert.boolArrayToInt( getStream(0,20,image)) ;
-            let L = convert.boolArrayToInt( getStream(X+10,32,image));
+            let L = convert.boolArrayToInt( getStream(X+20,16,image));
             //Now get L bytes after X+36 as a buffer and decode
             let stream = getStream(X+36,L,image); // 
             let message = encoder.decode(stream);
