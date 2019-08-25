@@ -4,7 +4,7 @@ export {
     decode,
     encode
 };
-
+import * as convert from "./convert";
 
 
 function decode(boolArr:boolean[]):string{
@@ -22,13 +22,7 @@ function decode(boolArr:boolean[]):string{
     //Get the values from the blocks
     let charCodeArray :number[] = [];
     for(let bools of boolBlocks){
-        bools = bools.reverse();
-        let value = 0;
-        for(let i = 0; i < bools.length;i++){
-            if(bools[i]){
-                value += 2**i;
-            }
-        }
+        const value = convert.boolArrayToInt(bools)
         charCodeArray.push(value)
     }
     //Generate a String out of the charcodes.
@@ -100,21 +94,8 @@ function encode(msg:string):boolean[]{
             throw new Error("CharCode cannot be greater than 255.")
         }
         let indexAsBoolArr:boolean[] = [];
-        let i = index;
-        while(i > 0){
-            const remainder = i%2
-            indexAsBoolArr.push(remainder % 2 !== 0)
-            i = Math.floor(i / 2)
-        }
-        //now prepend falses if necessary.
-        const valuesToPrepend = 8-indexAsBoolArr.length
-        if(valuesToPrepend>0){
-            const prependArray = new Array(valuesToPrepend).fill(false);
-            indexAsBoolArr.unshift(...prependArray);
-        }
-        if(indexAsBoolArr.length !== 8){
-            throw new Error("indexArray always has to have a length of 8")
-        }
+        indexAsBoolArr.push(...convert.intToBoolArray(index,8))
+       
         returnArray.push(...indexAsBoolArr);
     }
     return returnArray;
