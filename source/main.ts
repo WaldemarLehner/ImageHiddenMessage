@@ -3,7 +3,7 @@ import cli = require("readline-sync");
 import Jimp = require("jimp");
 import "./types";
 import * as encoder from "./encoder";
-import { pathToFileURL } from "url";
+import * as convert from "./convert";
 
 
 main();
@@ -13,42 +13,46 @@ function main(){
     //const image = await getImage(path);
     //getImage(path)
     Jimp.read(path)
-    .then( value => {
-        console.log("Image: ",value)
-       if( checkIfEntryExists(value)){
+    .then( image => {
+    
+       if( checkIfEntryExists(image)){
            //The structure exists and one can assume that the image contains a hidden message.
-            let X = encoder.decodeAsNumber( getStream(0,20,value)) ;
-            let L = encoder.decodeAsNumber( getStream(X+20,16,value));
+            let X = convert.boolArrayToInt( getStream(0,20,image)) ;
+            let L = convert.boolArrayToInt( getStream(X+10,32,image));
             //Now get L bytes after X+36 as a buffer and decode
-            let stream = getStream(X+36,L,value); // 1L = 2px
+            let stream = getStream(X+36,L,image); // 
             let message = encoder.decode(stream);
-
+            console.log("message >>> ",message)
 
         }else{
            //No hidden message exists. Ask the user if they want to encode a hidden message
            if(cli.keyInYN("No message has been found. Do you want to create one?")){
                 //TODO
-                generateMessage(value).then(msg => {
-                    
+                generateMessage(image).then(msg => {
+                    //The message encoded as booleanArray
                     const messageArray = encoder.encode(msg);
-                    const messageLength = Math.ceil(messageArray.length / 4);
+                    
                     //Message Length as array:
-                    const messageLengthArray = intToBoolArray(messageLength,true,16);
-                    //get all message starts that are possile. They have to be picked so 
-                    //that the message fits into the image, yet does not get in conflict with the other critial data.
-                    const startingIndex = getSuitableMessageStartPosition(value,messageLength);    
-                    const startpointer = startingIndex-36      
-                    const startIndicationArray = intToBoolArray(startpointer,true,20);
+                    const messageLengthArray = convert.intToBoolArray(messageArray.length/4,16*4);
+                    console.log("msg len arr:",messageArray.length,messageLengthArray);
+                    //Gets a working message start
+                    const startingIndex = getSuitableMessageStartPosition(image,messageArray.length/4);    
+                    const startpointer = startingIndex-36//X
+                    const startIndicationArray = convert.intToBoolArray(startpointer,20*4);
+
+                    console.log("###\n")
+                    console.log(startpointer,"<>",startIndicationArray)
                     //WriteBuffers is an array of all the data that needs to be written.
                     const writeCommands : WriteCommand[] = [
-                        {data: messageArray,offset: startingIndex},                 //Message
-                        {data: messageLengthArray, offset: startingIndex-16},       //Length Indicator
-                        {data: startIndicationArray, offset:startpointer},
-                        {data: startIndicationArray, offset:0}                                                    //2nd Pointer
+                        {data: startIndicationArray, offset:0}   ,
+                        {data: startIndicationArray, offset:startpointer},           
+                        {data: messageLengthArray, offset: startpointer+20},     
+                        {data: messageArray,offset: startpointer+36}          
                     ];
-                    executeWriteCommands(writeCommands,value).then(img => {
+                    executeWriteCommands(writeCommands,image).then(img => {
                         let timestamp = + new Date();
-                        let newPath  = path.split(".png").splice(1,1).join("") + "_" + timestamp + ".png";
+                        console.log("path:",path)
+                        let newPath  = path.split(".png")[0] + "_" + timestamp + ".png";
                         img.write(newPath,(err,img)=>{
                             if (err) {
                                 throw err;
@@ -75,7 +79,7 @@ function selectImage():string {
         validate: validateImagePath ? true : "Given path is not a .png or does not exist\n\n\n",
         isFile : true
     }
-    let path:string =  cli.questionPath("Please select an image to check. It has to be PNG.",cliConfig);
+    let path:string =  cli.questionPath("Please select an image to check. It has to be PNG.\n",cliConfig);
     return path;
 
     function validateImagePath(path_:string):boolean {
@@ -91,16 +95,25 @@ function selectImage():string {
 
 function checkIfEntryExists(image:Jimp):boolean{
     //Read first 20px
-    let entryIndicator = encoder.decodeAsNumber( getStream(0,20,image))  % (image.getWidth() * image.getHeight()) ;
+    let entryIndicator =    convert.boolArrayToInt( getStream(0,20,image))              % (image.getWidth() * image.getHeight()) ;
     //Read 20px after the X (including X)
-    let entry = encoder.decodeAsNumber( getStream(entryIndicator,20,image));
-
-    return entry === entryIndicator && entry !== 0;
+    let entry =             convert.boolArrayToInt( getStream(entryIndicator,20,image)) % (image.getWidth() * image.getHeight()) ;
+    console.log(entryIndicator,entry)
+    return entry === entryIndicator && entry !== 0 && entry !== 2**80;
 }
 
-// Returns the Pixels from the given range.
+/**
+ * Returns an array of pixels from the lower bounds up to the upper bound
+ * @param lower The lower bound
+ * @param upper The upper bound
+ * @param image The jimp image object
+ */
 function getPixelRange(lower:number,upper:number,image:Jimp):Pixel[]{
-    console.log("upper:",upper,"lower:",lower)
+    const maxIndex = getImageDimensions(image).x * getImageDimensions(image).y
+    if(lower < 0 || upper < 0 || lower >= maxIndex || upper >= maxIndex){
+        throw new Error("Lower and/or Upper are out of bounds!"+lower+" "+upper)
+    }
+
     if(isInt(lower) && isInt(upper)){
         if(lower == upper)
             return getPixelLinearized(upper,image);
@@ -121,7 +134,11 @@ function getPixelRange(lower:number,upper:number,image:Jimp):Pixel[]{
     }
 }
 
-
+/**
+ * Takes an array of indices and returns the corresponding pixel from the image.
+ * @param index The indices of the pixels that shall be returned
+ * @param image The jimp image object
+ */
 function getPixelLinearized(index:number | number[] ,image : Jimp):Pixel[] {
     
     //Check data integrity.
@@ -133,9 +150,8 @@ function getPixelLinearized(index:number | number[] ,image : Jimp):Pixel[] {
     if(!isEveryValueInt(index))
             throw new TypeError("Given array has values that are not numbers  \nIndices: "+index);
     let returnArray:Pixel[] = [];
-    console.log(index)
+    
     for(let i = 0; i < index.length; i++){
-        console.log(">>> "+i+" @ "+index[i])
         if(pixelCount < index[i]){
                 throw new Error("The given indices shall not exceed the pixel count. \nIndex in question:"+index[i]);
         }
@@ -145,6 +161,7 @@ function getPixelLinearized(index:number | number[] ,image : Jimp):Pixel[] {
     
 
     function get2DCoordinate(index:number):Coordinate{
+        index %= (dimensions.x * dimensions.y);
         return {x: index % dimensions.x,y: Math.floor(index/dimensions.x)}
     }
     function getPixel(position:Coordinate):Pixel{
@@ -158,7 +175,10 @@ function getPixelLinearized(index:number | number[] ,image : Jimp):Pixel[] {
 
 
 
-
+/**
+ * Returns width and height of image
+ * @param image Jimp image object
+ */
 function getImageDimensions(image:Jimp) : Dimension {
     let bitmap = image.bitmap;
 
@@ -188,66 +208,18 @@ function isEveryValueInt(val: any[]):boolean{
     }
     return true;
 }
-function byteArrayToBoolArray(buf:Uint8Array) : boolean[] {
-    let boolArray :boolean[] = [];
-    for(let i = 0;i<buf.length;i++){
-        let asBoolArray = intToBoolArray(buf[i],true);
-        for(let el of asBoolArray){
-            boolArray.push(el);
-        }
-    }
-    return boolArray;
 
 
-}
-
-function intToBoolArray(num:number,isLsbFirst : boolean,fixedLength?:number):boolean[]{
-    
-    if(!isInt(num))
-       throw new TypeError("First param. needs to be an Integer.")
-    let retArr : boolean[] = []; //MSB first
-    
-    do{
-        if(num%2 === 0){
-            retArr.push(false);
-            num /= 2;
-        }else{
-            retArr.push(true);
-            num--;
-            num /= 2;
-        }
-
-        
-    }while(num > 0);
-    if(typeof fixedLength === "number"){
-        const numbersToPrepend = fixedLength*4 - retArr.length; //*4 because 1px is 4 bits (1 nibble)
-
-        if(numbersToPrepend > 0){
-            let dataToUnShift = new Array(numbersToPrepend).fill(false);
-            retArr.unshift(...dataToUnShift);
-        }else if(numbersToPrepend < 0){
-            throw new Error("The given space passed as fixedLength is not enough! FixedLength:"+fixedLength+" MessageLength:"+retArr.length)
-        }
-        
-    }
-    
-    
-    if(isLsbFirst){
-        return retArr.reverse();
-    }else{
-        return retArr;
-    }
-
-}
 /**  
- * @param length in chars.
+ * Reads the data from the image and stores it in a boolean array
+ * @param length in pixels.
 */
 function getStream(offset:number,length:number,image:Jimp) : boolean[] {
     let array:boolean[] = []
-    const pixels = getPixelRange(offset,offset+2*length,image);
-    for(let i = 0;i<2*length;i++){
+    const pixels = getPixelRange(offset,offset+2*length,image); 
+    for(let i = 0;i<length;i++){
         const px = pixels[i];
-        array.push(
+        array.push( 
             px.r % 2 !== 0,
             px.g % 2 !== 0,
             px.b % 2 !== 0,
@@ -259,7 +231,10 @@ function getStream(offset:number,length:number,image:Jimp) : boolean[] {
     }
     return array;
 }
-
+/**
+ * A function that asks the user to set a message to be hidden inside the image
+ * @param image 
+ */
 async function generateMessage(image:Jimp) : Promise<string> {
     let maxBytes = (getImageDimensions(image).x * getImageDimensions(image).y / 2) - 56
     console.log("Please type in the message. The maximum message length for this image is "+maxBytes+" Bytes. UTF8 uses 1 to 4 Bytes per Character.\n\n\”")
@@ -275,7 +250,11 @@ async function generateMessage(image:Jimp) : Promise<string> {
  
 }
 
-
+/**
+ * Tries to find a suitable message start. This will be an index at which the first message pixel is written, followed by other message pixels
+ * @param img The jimp image object
+ * @param messageLength The length of a message in pixels
+ */
 function getSuitableMessageStartPosition(img:Jimp,messageLength:number):number{
     const pixelCount = getImageDimensions(img).x * getImageDimensions(img).y;
     const lowerBound = 56 // 20px for begin, 20px for begin check, 16px for length
@@ -291,13 +270,25 @@ function getSuitableMessageStartPosition(img:Jimp,messageLength:number):number{
 }
 
 
-
+/**
+ * 
+ * @param cmds An array of writeCommands. These writecommands have an offset(this is where the message begins) as well as the data itself as a boolarray
+ * @param image the image that should be written to.
+ */
 async function executeWriteCommands(cmds: WriteCommand[],image:Jimp) : Promise<Jimp> {
+    let i = 0;
     for(const cmd of cmds){
+        i++
         await writeCommand(cmd.data,cmd.offset);
+        console.log("! Executed command number ",i)
+
     }
     return image;
-
+    /**
+     * 
+     * @param data The data that needs to be written
+     * @param offset The offset as pixels
+     */
     async function writeCommand(data:boolean[],offset:number){
         //Write data as pixelsmask (true and false)
         if(data.length % 4 !== 0){
@@ -306,24 +297,24 @@ async function executeWriteCommands(cmds: WriteCommand[],image:Jimp) : Promise<J
         let DataAspixelBits :PixelMask[]= [];
         for(let i = 0; i < (data.length / 4);i++){
             DataAspixelBits.push({
-                r: data[i*4] || false,
-                g: data[i*4+1] || false,
-                b: data[i*4+2] || false,
-                a: data[i*4+3] || false
+                r: data[i*4] ,
+                g: data[i*4+1] ,
+                b: data[i*4+2] ,
+                a: data[i*4+3] 
             })
         }
+        console.log(DataAspixelBits)
         try{
-            for(let i = offset; i < offset+DataAspixelBits.length;i++){
+            for(let i = 0; i < DataAspixelBits.length;i++){
                 ///STOPPED HERE
-                const pixelIndex = [i%image.getWidth(),Math.floor(i/image.getWidth())];
-                let pixel :Pixel= Jimp.intToRGBA( image.getPixelColor(pixelIndex[0],pixelIndex[1]));
-                console.log(320,pixel)
+               
+                const pixelIndex:Coordinate = {x:(i+offset)%image.getWidth(),y:Math.floor((i+offset)/image.getWidth())};
+                let pixel :Pixel= Jimp.intToRGBA( image.getPixelColor(pixelIndex.x,pixelIndex.y));
+           
                 
-                
-                pixel = manipulatePixel(pixel,DataAspixelBits[i-offset]);
-
+                pixel = manipulatePixel(pixel,DataAspixelBits[i]);
                 const pixelValue = Jimp.rgbaToInt(pixel.r,pixel.g,pixel.b,pixel.a,undefined)
-                image.setPixelColor(pixelValue,pixelIndex[0],pixelIndex[1])
+                image.setPixelColor(pixelValue,pixelIndex.x,pixelIndex.y)
             }
         }catch(e){
             console.error("Failed to manipulate image");
